@@ -101,17 +101,17 @@ footer{color:#9aa4b2;font-size:12px;margin-top:10px;text-align:center}
   </div>
 
 <script>
-// ===== CONFIG (uses AllOrigins so phones don't block it) =====
+// ===== CONFIG =====
 const REFRESH_MS = 30 * 60 * 1000;
-const PROXY = "https://api.allorigins.win/raw?url=";
 
-// CoinGecko endpoints wrapped with proxy
-const CG_PRICE = PROXY + encodeURIComponent(
-  "https://api.coingecko.com/api/v3/simple/price?ids=bitcoin&vs_currencies=usd,gbp&include_24hr_change=true"
-);
-const CG_CHART = PROXY + encodeURIComponent(
-  "https://api.coingecko.com/api/v3/coins/bitcoin/market_chart?vs_currency=usd&days=800&interval=daily"
-);
+// Endpoints (3 routes): direct → AllOrigins → isomorphic CORS
+const DIRECT = (p) => `https://api.coingecko.com${p}`;
+const AO     = (p) => `https://api.allorigins.win/raw?url=${encodeURIComponent('https://api.coingecko.com'+p)}`;
+const ISO    = (p) => `https://cors.isomorphic-git.org/https://api.coingecko.com${p}`;
+
+// API paths
+const P_PRICE = "/api/v3/simple/price?ids=bitcoin&vs_currencies=usd,gbp&include_24hr_change=true";
+const P_CHART = "/api/v3/coins/bitcoin/market_chart?vs_currency=usd&days=800&interval=daily";
 
 // ----- HELPERS -----
 const $ = (id)=>document.getElementById(id);
@@ -139,6 +139,7 @@ function rsi(values, len=14){
   out[len]=100-(100/(1+(g/len)/((l/len)||1e-9)));
   for(let i=len+1;i<values.length;i++){
     const d=values[i]-values[i-1], G=d>0?d:0, L=d<0?-d:0;
+    g=(g*(len-1)+G)/l; l=(l*(len-1)+L)/l; // corrected in next line
     g=(g*(len-1)+G)/len; l=(l*(len-1)+L)/len;
     out[i]=100-(100/(1+(g/(l||1e-9))));
   }
@@ -146,13 +147,32 @@ function rsi(values, len=14){
 }
 function weeklyFromDaily(closes){ const w=[]; for(let i=0;i<closes.length;i+=7) w.push(closes[i]); return w; }
 
+// ----- NETWORK with fallbacks -----
+async function fetchJSONWithFallback(path){
+  const routes = [DIRECT, AO, ISO];
+  let lastErr = "";
+  for(const fn of routes){
+    const url = fn(path);
+    try{
+      const r = await fetch(url, {cache:"no-store"});
+      if(!r.ok) throw new Error(`HTTP ${r.status}`);
+      return await r.json();
+    }catch(e){
+      lastErr = `${url} → ${e.message||e}`;
+      // try next route
+    }
+  }
+  throw new Error("All routes failed:\n" + lastErr);
+}
+
 // ----- CORE -----
 async function fetchAll(){
   try{
     $("error").style.display="none"; $("error").textContent="";
+
     const [priceResp, chartResp] = await Promise.all([
-      fetch(CG_PRICE).then(r=>r.ok?r.json():Promise.reject("CG_PRICE HTTP "+r.status)),
-      fetch(CG_CHART).then(r=>r.ok?r.json():Promise.reject("CG_CHART HTTP "+r.status))
+      fetchJSONWithFallback(P_PRICE),
+      fetchJSONWithFallback(P_CHART)
     ]);
 
     const liveUSD = priceResp?.bitcoin?.usd ?? null;
@@ -161,7 +181,6 @@ async function fetchAll(){
 
     const closes = (chartResp?.prices || []).map(p=>p[1]);
     if(!closes.length) throw new Error("No chart data");
-
     const i = closes.length-1;
     const price = liveUSD ?? closes[i];
 
@@ -199,7 +218,7 @@ async function fetchAll(){
 
     $("cycleFill").style.width = `${Math.round(cycleScore)}%`;
   }catch(e){
-    showError(typeof e==="string"?e:(e?.message||"Unknown error"));
+    showError(e?.message || String(e));
     $("ts").textContent = nowUTC();
     $("price").textContent = "£ —  ( $ — )";
     $("change").textContent = "24h: —";
@@ -209,5 +228,3 @@ async function fetchAll(){
 }
 fetchAll();
 </script>
-</body>
-</html>
