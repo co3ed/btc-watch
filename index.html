@@ -1,0 +1,213 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1"/>
+<title>₿ BTC Top/Bottom Watch</title>
+<style>
+:root{
+  --bg:#0e1117; --card:#141a23; --text:#e9eef5; --muted:#9aa4b2;
+  --ring:#222a39; --green:#1fbf75; --amber:#f5a524; --red:#ea3943;
+  --line:#1f2532;
+}
+*{box-sizing:border-box;font-family:system-ui,Segoe UI,Roboto,Arial,sans-serif}
+body{margin:0;background:var(--bg);color:var(--text)}
+.wrap{max-width:980px;margin:0 auto;padding:16px}
+.bar{display:flex;justify-content:space-between;align-items:flex-end;margin-bottom:12px}
+h1{font-size:18px;margin:0}
+.stamp{font-size:12px;color:var(--muted)}
+.grid{display:grid;grid-template-columns:1fr;gap:14px}
+@media(min-width:920px){.grid{grid-template-columns:1.2fr .8fr}}
+.card,.k{background:var(--card);border:1px solid var(--line);border-radius:16px;padding:14px}
+.k{margin-bottom:10px}
+.gaugeWrap{position:relative;display:flex;flex-direction:column;align-items:center}
+.gLabel{position:absolute;bottom:52px;text-align:center;font-weight:700;font-size:13px;color:var(--muted)}
+.verdict{position:absolute;bottom:18px;text-align:center;font-weight:900;font-size:32px;letter-spacing:.3px}
+.buy{color:var(--green)} .hold{color:var(--amber)} .sell{color:var(--red)}
+.bigline{display:flex;gap:10px;align-items:baseline;justify-content:center;margin-top:10px}
+.bigline .p{font-size:24px;font-weight:800}
+.bigline .d{font-size:13px;color:var(--muted)}
+.pill{padding:6px 10px;border-radius:999px;font-size:12px;font-weight:800;border:1px solid transparent}
+.green{background:rgba(31,191,117,.12);color:var(--green);border-color:rgba(31,191,117,.35)}
+.amber{background:rgba(245,165,36,.12);color:var(--amber);border-color:rgba(245,165,36,.35)}
+.red{background:rgba(234,57,67,.12);color:var(--red);border-color:rgba(234,57,67,.35)}
+.row{display:flex;justify-content:space-between;align-items:center;margin:6px 0}
+.barFill{height:10px;background:linear-gradient(90deg,#1fbf75,#f5a524,#ea3943);border-radius:8px}
+.bar{background:#0f1420;border:1px solid var(--line);border-radius:8px;padding:6px}
+.hint{margin-top:6px;color:var(--muted);font-size:12px}
+footer{color:#9aa4b2;font-size:12px;margin-top:10px;text-align:center}
+#error{display:none;margin-top:10px;padding:10px;border:1px solid #8b1e1e;border-radius:8px;background:#2a1111;color:#ffb4b4;font-size:12px;white-space:pre-wrap}
+</style>
+</head>
+<body>
+  <div class="wrap">
+    <header class="bar">
+      <h1>₿ BTC Top/Bottom Watch</h1>
+      <div class="stamp">Updated <span id="ts">—</span> UTC</div>
+    </header>
+
+    <main class="grid">
+      <!-- LEFT: GAUGE -->
+      <section class="card">
+        <div class="gaugeWrap">
+          <svg id="gauge" viewBox="0 0 240 160" width="100%" style="max-width:680px">
+            <path d="M30 130 A90 90 0 0 1 210 130" fill="none" stroke="var(--ring)" stroke-width="22" stroke-linecap="round"/>
+            <path d="M30 130 A90 90 0 0 1 90 60" fill="none" stroke="var(--green)" stroke-width="22" stroke-linecap="round"/>
+            <path d="M90 60 A90 90 0 0 1 150 60" fill="none" stroke="var(--amber)" stroke-width="22" stroke-linecap="round"/>
+            <path d="M150 60 A90 90 0 0 1 210 130" fill="none" stroke="var(--red)" stroke-width="22" stroke-linecap="round"/>
+            <circle cx="120" cy="130" r="6" fill="#e9eef5"/>
+            <g id="needle" transform="rotate(-90,120,130)">
+              <path d="M120 130 L120 34" stroke="#e9eef5" stroke-width="3"/>
+              <circle cx="120" cy="34" r="4" fill="#e9eef5"/>
+            </g>
+          </svg>
+          <div class="gLabel">Cycle Heat (0–10)</div>
+          <div id="verdict" class="verdict hold">HOLD</div>
+        </div>
+
+        <div class="bigline">
+          <div class="p" id="price">£ — ( $ — )</div>
+          <div class="d" id="change">24h: —</div>
+        </div>
+
+        <div id="error"></div>
+      </section>
+
+      <!-- RIGHT: INFO PANEL -->
+      <aside>
+        <div class="k">
+          <div class="t">Verdict</div>
+          <div class="v"><span id="verdictPill" class="pill amber">HOLD</span></div>
+        </div>
+
+        <div class="k">
+          <div class="t">Quick View</div>
+          <div class="row"><span>Trend vs 200-day</span><span id="trend" class="pill amber">—</span></div>
+          <div class="row"><span>RSI (Weekly)</span><span id="rsiw" class="pill amber">—</span></div>
+          <div class="row"><span>Funding (8h)</span><span id="fund" class="pill amber">—</span></div>
+          <div class="row"><span>Fear & Greed</span><span id="fg" class="pill amber">—</span></div>
+          <div class="row"><span>Pi Cycle</span><span id="pi" class="pill amber">—</span></div>
+        </div>
+
+        <div class="k">
+          <div class="t">Cycle Bar (0–100)</div>
+          <div class="bar"><div id="cycleFill" class="barFill" style="width:0%"></div></div>
+          <div class="hint">0–25 Bear · 26–75 Bull · 76–100 Peak</div>
+        </div>
+      </aside>
+    </main>
+
+    <footer>0–3 = BUY · 4–6 = HOLD · 7–10 = SELL · (Free data via CoinGecko + AllOrigins)</footer>
+  </div>
+
+<script>
+// ===== CONFIG (uses AllOrigins so phones don't block it) =====
+const REFRESH_MS = 30 * 60 * 1000;
+const PROXY = "https://api.allorigins.win/raw?url=";
+
+// CoinGecko endpoints wrapped with proxy
+const CG_PRICE = PROXY + encodeURIComponent(
+  "https://api.coingecko.com/api/v3/simple/price?ids=bitcoin&vs_currencies=usd,gbp&include_24hr_change=true"
+);
+const CG_CHART = PROXY + encodeURIComponent(
+  "https://api.coingecko.com/api/v3/coins/bitcoin/market_chart?vs_currency=usd&days=800&interval=daily"
+);
+
+// ----- HELPERS -----
+const $ = (id)=>document.getElementById(id);
+function nowUTC(){ return new Date().toISOString().replace('T',' ').slice(0,16); }
+function round(n,d=2){ return Number.parseFloat(n).toFixed(d); }
+function clamp(n,a,b){ return Math.max(a, Math.min(b, n)); }
+function scoreToAngle(s){ return -90 + (clamp(s,0,10)/10)*180; }
+function setVerdict(score){
+  let verdict="HOLD", cls="hold", pill="amber";
+  if(score<=3.3){ verdict="BUY"; cls="buy"; pill="green"; }
+  else if(score>=6.7){ verdict="SELL"; cls="sell"; pill="red"; }
+  $("verdict").textContent = verdict;
+  $("verdict").className = `verdict ${cls}`;
+  const vp = $("verdictPill"); if(vp){ vp.textContent = verdict; vp.className = `pill ${pill}`; }
+}
+function showError(msg){ const e=$("error"); e.style.display="block"; e.textContent=msg; }
+function sma(values, window){
+  const out=Array(values.length).fill(null); let sum=0;
+  for(let i=0;i<values.length;i++){ sum+=values[i]; if(i>=window) sum-=values[i-window]; if(i>=window-1) out[i]=sum/window; }
+  return out;
+}
+function rsi(values, len=14){
+  const out=Array(values.length).fill(null); let g=0,l=0;
+  for(let i=1;i<=len;i++){ const d=values[i]-values[i-1]; if(d>0)g+=d; else l-=d; }
+  out[len]=100-(100/(1+(g/len)/((l/len)||1e-9)));
+  for(let i=len+1;i<values.length;i++){
+    const d=values[i]-values[i-1], G=d>0?d:0, L=d<0?-d:0;
+    g=(g*(len-1)+G)/len; l=(l*(len-1)+L)/len;
+    out[i]=100-(100/(1+(g/(l||1e-9))));
+  }
+  return out;
+}
+function weeklyFromDaily(closes){ const w=[]; for(let i=0;i<closes.length;i+=7) w.push(closes[i]); return w; }
+
+// ----- CORE -----
+async function fetchAll(){
+  try{
+    $("error").style.display="none"; $("error").textContent="";
+    const [priceResp, chartResp] = await Promise.all([
+      fetch(CG_PRICE).then(r=>r.ok?r.json():Promise.reject("CG_PRICE HTTP "+r.status)),
+      fetch(CG_CHART).then(r=>r.ok?r.json():Promise.reject("CG_CHART HTTP "+r.status))
+    ]);
+
+    const liveUSD = priceResp?.bitcoin?.usd ?? null;
+    const liveGBP = priceResp?.bitcoin?.gbp ?? null;
+    const chg24   = priceResp?.bitcoin?.usd_24h_change ?? null;
+
+    const closes = (chartResp?.prices || []).map(p=>p[1]);
+    if(!closes.length) throw new Error("No chart data");
+
+    const i = closes.length-1;
+    const price = liveUSD ?? closes[i];
+
+    const ma111 = sma(closes,111);
+    const ma200 = sma(closes,200);
+    const ma350 = sma(closes,350);
+
+    const dist200 = ma200[i] ? price/ma200[i]-1 : 0;
+    const rsiW = rsi(weeklyFromDaily(closes),14).at(-1);
+    const piCross = (ma111[i] && ma350[i]) ? (ma111[i] > ma350[i]*2) : false;
+
+    const sPi    = clamp(dist200*50,0,10);
+    const sRsiW  = clamp((rsiW||50)/10,0,10);
+    const sTrend = ma200[i]? clamp(price>ma200[i]?6+Math.min(dist200*20,4):4+Math.max(dist200*20,-4),0,10):5;
+    const heat = sPi*0.45 + sRsiW*0.35 + sTrend*0.20;
+
+    const HALVING = Date.UTC(2024,3,20);
+    const days = Math.max(0, Math.floor((Date.now()-HALVING)/86400000));
+    const cycleAge = clamp(days/1470,0,1);
+    const macro = clamp((dist200*200 + (rsiW||50))/2, 0, 100);
+    const cycleScore = clamp((cycleAge*50) + (macro/2), 0, 100);
+
+    $("ts").textContent = nowUTC();
+    $("price").textContent = `£ ${Number((liveGBP ?? price*0.79)).toLocaleString()}  ( $ ${Number(price).toLocaleString()} )`;
+    $("change").textContent = `24h: ${chg24==null ? "—" : ((chg24>=0?"+":"")+round(chg24,2)+"%")}`;
+
+    $("needle").setAttribute("transform",`rotate(${scoreToAngle(heat)},120,130)`);
+    setVerdict(heat);
+
+    $("trend").textContent = dist200>0 ? `Up (${round(dist200*100,1)}%)` : `Down (${round(dist200*100,1)}%)`;
+    $("rsiw").textContent = rsiW ? round(rsiW,1) : "—";
+    $("fund").textContent = "—";
+    $("fg").textContent   = "—";
+    $("pi").textContent   = piCross ? "Cross ACTIVE" : (ma111[i] && ma350[i]) ? "No cross" : "Waiting";
+
+    $("cycleFill").style.width = `${Math.round(cycleScore)}%`;
+  }catch(e){
+    showError(typeof e==="string"?e:(e?.message||"Unknown error"));
+    $("ts").textContent = nowUTC();
+    $("price").textContent = "£ —  ( $ — )";
+    $("change").textContent = "24h: —";
+  }finally{
+    setTimeout(fetchAll, REFRESH_MS);
+  }
+}
+fetchAll();
+</script>
+</body>
+</html>
