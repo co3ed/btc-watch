@@ -107,7 +107,7 @@ const REFRESH_MS = 30 * 60 * 1000;
 // Endpoints (3 routes): direct → AllOrigins → isomorphic CORS
 const DIRECT = (p) => `https://api.coingecko.com${p}`;
 const AO     = (p) => `https://api.allorigins.win/raw?url=${encodeURIComponent('https://api.coingecko.com'+p)}`;
-const ISO    = (p) => `https://cors.isomorphic-git.org/https://api.coingecko.com${p}`;
+const ISO    = (p) => `https://api.allorigins.win/raw?url=${encodeURIComponent('https://api.coingecko.com'+p)}`;
 
 // API paths
 const P_PRICE = "/api/v3/simple/price?ids=bitcoin&vs_currencies=usd,gbp&include_24hr_change=true";
