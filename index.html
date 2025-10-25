@@ -33,6 +33,7 @@ h1{font-size:18px;margin:0}
 .hint{margin-top:6px;color:var(--muted);font-size:12px}
 footer{color:#9aa4b2;font-size:12px;margin-top:10px;text-align:center}
 #error{display:none;margin-top:10px;padding:10px;border:1px solid #8b1e1e;border-radius:8px;background:#2a1111;color:#ffb4b4;font-size:12px;white-space:pre-wrap}
+.small{font-size:11px;color:var(--muted);margin-top:6px}
 </style>
 </head>
 <body>
@@ -66,6 +67,7 @@ footer{color:#9aa4b2;font-size:12px;margin-top:10px;text-align:center}
         </div>
 
         <div id="error"></div>
+        <div id="netnote" class="small"></div>
       </section>
 
       <aside>
@@ -91,107 +93,233 @@ footer{color:#9aa4b2;font-size:12px;margin-top:10px;text-align:center}
       </aside>
     </main>
 
-    <footer>0–3 = BUY · 4–6 = HOLD · 7–10 = SELL · (Data via CoinGecko)</footer>
+    <footer>0–3 = BUY · 4–6 = HOLD · 7–10 = SELL · (Data: Binance WS + CoinGecko + Binance Funding + alt.me F&G)</footer>
   </div>
 
 <script>
-const REFRESH_MS = 30*60*1000;
+/*** CONFIG ***/
+const FAST_MS = 10_000;          // backup price/24h change
+const SLOW_MS = 60*60_000;       // indicators refresh
+const BACKOFF = 30_000;          // retry delay
+const PROXIES = [
+  "https://cors.isomorphic-git.org/",
+  "https://thingproxy.freeboard.io/fetch/"
+];
 
-const P_PRICE = "https://api.coingecko.com/api/v3/simple/price?ids=bitcoin&vs_currencies=usd,gbp&include_24hr_change=true";
-const P_CHART = "https://api.coingecko.com/api/v3/coins/bitcoin/market_chart?vs_currency=usd&days=365&interval=daily";
+/*** ENDPOINTS ***/
+const priceUrl = (t=Date.now()) =>
+  `https://api.coingecko.com/api/v3/simple/price?ids=bitcoin&vs_currencies=usd,gbp&include_24hr_change=true&_=${t}`;
+const chartUrl = (t=Date.now()) =>
+  `https://api.coingecko.com/api/v3/coins/bitcoin/market_chart?vs_currency=usd&days=365&interval=daily&_=${t}`;
+const fundUrl  = (t=Date.now()) =>
+  `https://fapi.binance.com/fapi/v1/fundingRate?symbol=BTCUSDT&limit=1&_=${t}`;
+const fngUrl   = (t=Date.now()) =>
+  `https://api.alternative.me/fng/?limit=1&date_format=us&_=${t}`;
 
-const $ = (id) => document.getElementById(id);
-function nowUTC(){return new Date().toISOString().replace('T',' ').slice(0,16);}
-function round(n,d=2){return Number.parseFloat(n).toFixed(d);}
-function clamp(n,a,b){return Math.max(a,Math.min(b,n));}
-function scoreToAngle(s){return -90+(clamp(s,0,10)/10)*180;}
-function setVerdict(s){
-  let v="HOLD",cls="hold";
-  if(s<=3.3){v="BUY";cls="buy"}
-  else if(s>=6.7){v="SELL";cls="sell"}
-  $("verdict").textContent=v;
-  $("verdict").className=`verdict ${cls}`;
-  const vp=$("verdictPill");
-  if(vp){vp.textContent=v;vp.className=`pill ${cls==='buy'?'green':cls==='sell'?'red':'amber'}`;}
-}
+/*** DOM HELPERS ***/
+const $=(id)=>document.getElementById(id);
+const nowUTC = ()=>new Date().toISOString().replace('T',' ').slice(0,16);
+const round=(n,d=2)=>Number.isFinite(+n)?(+n).toFixed(d):"—";
+const clamp=(n,a,b)=>Math.max(a,Math.min(b,n));
+function setPill(el,tone,text){ if(!el)return; el.textContent=text; el.className=`pill ${tone}`; }
 function showError(m){const e=$("error");e.style.display="block";e.textContent=m;}
-function sma(v,w){
-  const o=Array(v.length).fill(null);let s=0;
-  for(let i=0;i<v.length;i++){s+=v[i];if(i>=w)s-=v[i-w];if(i>=w-1)o[i]=s/w;}
-  return o;
-}
+function hideError(){const e=$("error");e.style.display="none";}
+function setNetNote(msg){$("netnote").textContent=msg||"";}
+
+/*** TECHNICALS ***/
+function sma(v,w){const o=Array(v.length).fill(null);let s=0;for(let i=0;i<v.length;i++){s+=v[i];if(i>=w)s-=v[i-w];if(i>=w-1)o[i]=s/w;}return o;}
 function rsi(vals,len=14){
   if(vals.length<=len) return Array(vals.length).fill(null);
-  const out=Array(vals.length).fill(null);let g=0,l=0;
-  for(let i=1;i<=len;i++){const d=vals[i]-vals[i-1];if(d>0)g+=d;else l-=d;}
+  const out=Array(vals.length).fill(null); let g=0,l=0;
+  for(let i=1;i<=len;i++){const d=vals[i]-vals[i-1]; if(d>0)g+=d; else l-=d;}
   out[len]=100-(100/(1+(g/len)/((l/len)||1e-9)));
   for(let i=len+1;i<vals.length;i++){
     const d=vals[i]-vals[i-1],G=d>0?d:0,L=d<0?-d:0;
-    g=(g*(len-1)+G)/len;l=(l*(len-1)+L)/len;
+    g=(g*(len-1)+G)/len; l=(l*(len-1)+L)/len;
     out[i]=100-(100/(1+(g/(l||1e-9))));
+  } return out;
+}
+const weeklyFromDaily = (c)=>{const w=[];for(let i=0;i<c.length;i+=7)w.push(c[i]);return w;};
+const scoreToAngle = (s)=> -90+(clamp(s,0,10)/10)*180;
+function setVerdict(s){
+  let v="HOLD",cls="hold";
+  if(s<=3.3){v="BUY";cls="buy"} else if(s>=6.7){v="SELL";cls="sell"}
+  $("verdict").textContent=v; $("verdict").className=`verdict ${cls}`;
+  setPill($("verdictPill"), cls==='buy'?'green':cls==='sell'?'red':'amber', v);
+}
+
+/*** HTTP: try direct → auto-proxy fallback if CORS blocks ***/
+async function getJSONAny(url, timeoutMs=10_000){
+  // try direct first
+  try { return await getJSON(url, timeoutMs); }
+  catch(e1){
+    // if aborted or other network errors, try proxies one by one
+    for(const p of PROXIES){
+      try { return await getJSON(p + encodeURIComponent(url), timeoutMs); }
+      catch(e2){ /* continue */ }
+    }
+    throw e1;
   }
-  return out;
 }
-function weeklyFromDaily(c){const w=[];for(let i=0;i<c.length;i+=7)w.push(c[i]);return w;}
-
-async function getJSON(url){
-  const r = await fetch(url);
-  if(!r.ok) throw new Error("HTTP " + r.status);
-  return r.json();
-}
-
-async function fetchAll(){
+async function getJSON(url, timeoutMs=10_000){
+  const ctl = new AbortController();
+  const t = setTimeout(()=>ctl.abort(), timeoutMs);
   try{
-    $("error").style.display="none";
-    const [price,chart] = await Promise.all([ getJSON(P_PRICE), getJSON(P_CHART) ]);
+    const r = await fetch(url, {signal: ctl.signal, cache: 'no-store'});
+    if(!r.ok) throw new Error(`HTTP ${r.status} @ ${new URL(url.startsWith('http')?url:url).hostname}`);
+    return await r.json();
+  } finally { clearTimeout(t); }
+}
 
+/*** STATE ***/
+let fxGBPperUSD = null;   // live GBP from USD tick
+let ws = null, wsOpen = false;
+
+/*** LIVE PRICE VIA BINANCE WEBSOCKET ***/
+function openWS(){
+  try{ if(ws) ws.close(); }catch{}
+  ws = new WebSocket("wss://stream.binance.com:9443/ws/btcusdt@trade");
+  wsOpen = false;
+  ws.onopen = ()=>{ wsOpen = true; };
+  ws.onmessage = (ev)=>{
+    const data = JSON.parse(ev.data);
+    const usd = Number(data.p); // trade price
+    if(!Number.isFinite(usd)) return;
+    const gbp = fxGBPperUSD ? usd * fxGBPperUSD : null;
+    const gbpText = gbp ? Number(gbp).toLocaleString() : "—";
+    $("price").textContent = `£ ${gbpText}  ( $ ${Number(usd).toLocaleString()} )`;
+    $("ts").textContent = nowUTC();
+  };
+  ws.onclose = ()=>{ wsOpen = false; setTimeout(openWS, BACKOFF); };
+  ws.onerror = ()=>{ try{ws.close();}catch{} };
+}
+document.addEventListener("visibilitychange", ()=>{
+  if(document.hidden){ try{ ws && ws.close(); }catch{} }
+  else if(!wsOpen){ openWS(); }
+});
+
+/*** FAST LOOP: price snapshot (24h change + FX ratio) ***/
+async function fastLoop(){
+  try{
+    hideError(); setNetNote("");
+    const price = await getJSONAny(priceUrl());
     const liveUSD = price?.bitcoin?.usd;
     const liveGBP = price?.bitcoin?.gbp;
     const chg24   = price?.bitcoin?.usd_24h_change;
-    const closes  = chart?.prices?.map(p=>p[1]) || [];
-    if(!closes.length) throw new Error("No chart data");
+
+    if(Number.isFinite(liveUSD) && Number.isFinite(liveGBP)){
+      fxGBPperUSD = liveGBP / liveUSD;
+    }
+    $("change").textContent = `24h: ${(chg24>=0?"+":"")+round(chg24,2)}%`;
+  }catch(e){
+    showError(e.message || String(e));
+  }finally{
+    setTimeout(fastLoop, FAST_MS);
+  }
+}
+
+/*** SLOW LOOP: indicators + quick view ***/
+async function slowLoop(){
+  let next = SLOW_MS;
+  try{
+    hideError(); setNetNote("");
+    const [chart, fund, fng] = await Promise.all([
+      getJSONAny(chartUrl()),
+      getJSONAny(fundUrl()).catch(()=>null),  // will be proxied if needed
+      getJSONAny(fngUrl()).catch(()=>null),
+    ]);
+
+    // If either came via proxy, mention it once (nice for debugging)
+    // crude check: response URL can't be seen; instead infer from pills later
+    // We’ll just leave a generic note when either is null (blocked even after fallback)
+    if(fund===null || fng===null){ setNetNote("Note: some metrics blocked by your network — using best available."); }
+
+    const closes = (chart?.prices || []).map(p=>p[1]).filter(Number.isFinite);
+    if(closes.length < 200) throw new Error("Chart data too short for 200D MA");
 
     const i = closes.length - 1;
+    const ma111 = sma(closes,111);
     const ma200 = sma(closes,200);
-    if(ma200[i] == null) throw new Error("Not enough data for 200-day MA yet");
+    const ma350 = sma(closes,350);
 
-    const priceNow = liveUSD;
-    const dist200  = priceNow/ma200[i]-1;
+    // Use USD from DOM if present (WS), else last close
+    const domUSDMatch = $("price").textContent.match(/\$ ([\d,\.]+)/);
+    const domUSD = domUSDMatch ? Number(domUSDMatch[1].replace(/,/g,'')) : NaN;
+    const priceNowUSD = Number.isFinite(domUSD) ? domUSD : closes[i];
+    const dist200 = (ma200[i] ? (priceNowUSD/ma200[i]-1) : 0);
 
+    // RSI weekly
     const rsiWSeries = rsi(weeklyFromDaily(closes),14);
     const rsiW = rsiWSeries[rsiWSeries.length-1] ?? 50;
 
-    const sPi    = clamp(dist200*50,0,10);
+    // Pi-cycle spread (111 DMA vs 350 DMA * 2) with last-known fallback
+    const lastNonNull = (arr)=>{ for(let j=arr.length-1;j>=0;j--){ if(Number.isFinite(arr[j])) return arr[j]; } return null; };
+    const dma111 = Number.isFinite(ma111[i]) ? ma111[i] : lastNonNull(ma111);
+    const dma350 = Number.isFinite(ma350[i]) ? ma350[i] : lastNonNull(ma350);
+    let piText="—", piTone="amber";
+    if(dma111 && dma350){
+      const spread = (dma111/(dma350*2) - 1)*100;
+      piText = `${spread>=0?"+":""}${round(spread,1)}%`;
+      piTone = spread>10 ? "red" : spread<-10 ? "green" : "amber";
+    }
+
+    // Funding (Binance)
+    let fundText="—", fundTone="amber";
+    if(Array.isArray(fund) && fund.length){
+      const pct = Number(fund[0].fundingRate)*100;
+      if(Number.isFinite(pct)){
+        fundText = `${round(pct,4)}%`;
+        fundTone = pct>0.05?"red":pct<-0.05?"green":"amber";
+      }
+    } else if(fund===null){ fundText="— (blocked)"; fundTone="amber"; }
+
+    // Fear & Greed
+    let fgText="—", fgTone="amber";
+    const fngVal = Number(fng?.data?.[0]?.value);
+    if(Number.isFinite(fngVal)){
+      fgText = `${fngVal} (${fng?.data?.[0]?.value_classification||""})`.trim();
+      fgTone = fngVal>=75?"red":fngVal<=25?"green":"amber";
+    } else if(fng===null){ fgText="— (blocked)"; fgTone="amber"; }
+
+    // Heat score & verdict
+    const sPi    = clamp((dist200*50),0,10);
     const sRsiW  = clamp(rsiW/10,0,10);
-    const sTrend = clamp(priceNow>ma200[i]?6+Math.min(dist200*20,4):4+Math.max(dist200*20,-4),0,10);
+    const sTrend = clamp(priceNowUSD>ma200[i]?6+Math.min(dist200*20,4):4+Math.max(dist200*20,-4),0,10);
     const heat   = sPi*0.45 + sRsiW*0.35 + sTrend*0.20;
 
+    // Cycle bar
     const HALVING = Date.UTC(2024,3,20); // 20 Apr 2024
     const days = Math.floor((Date.now()-HALVING)/86400000);
     const cycleAge = clamp(days/1470,0,1);
-    const macro = clamp((dist200*200 + rsiW)/2,0,100);
+    const macro = clamp((dist200*200 + (rsiW||50))/2,0,100);
     const cycleScore = clamp((cycleAge*50) + (macro/2),0,100);
 
-    $("ts").textContent = nowUTC();
-    $("price").textContent = `£ ${Number(liveGBP).toLocaleString()}  ( $ ${Number(liveUSD).toLocaleString()} )`;
-    $("change").textContent = `24h: ${(chg24>=0?"+":"")+round(chg24,2)}%`;
+    // UI updates
     $("needle").setAttribute("transform", `rotate(${scoreToAngle(heat)},120,130)`);
     setVerdict(heat);
 
-    $("trend").textContent = dist200>0 ? `Up (${round(dist200*100,1)}%)` : `Down (${round(dist200*100,1)}%)`;
-    $("rsiw").textContent = round(rsiW,1);
-    $("fund").textContent = "—";
-    $("fg").textContent   = "—";
-    $("pi").textContent   = "—";
+    const trendTone = dist200>0?"green":dist200<0?"red":"amber";
+    const trendText = Number.isFinite(dist200)?(dist200>0?`Up (${round(dist200*100,1)}%)`:`Down (${round(dist200*100,1)}%)`):"—";
+    setPill($("trend"), trendTone, trendText);
+    setPill($("rsiw"), rsiW>70?"red":rsiW<30?"green":"amber", round(rsiW,1));
+    setPill($("fund"), fundTone, fundText);
+    setPill($("fg"),   fgTone,   fgText);
+    setPill($("pi"),   piTone,   piText);
 
     $("cycleFill").style.width = `${Math.round(cycleScore)}%`;
   }catch(e){
     showError(e.message || String(e));
+    setNetNote("Network hiccup — will retry shortly.");
+    next = BACKOFF;
   }finally{
-    setTimeout(fetchAll, REFRESH_MS);
+    setTimeout(slowLoop, next);
   }
 }
-fetchAll();
+
+/*** BOOT ***/
+openWS();
+fastLoop();
+slowLoop();
 </script>
 </body>
 </html>
