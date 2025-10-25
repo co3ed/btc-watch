@@ -34,7 +34,7 @@ h1{font-size:18px;margin:0}
 footer{color:#9aa4b2;font-size:12px;margin-top:10px;text-align:center}
 #error{display:none;margin-top:10px;padding:10px;border:1px solid #8b1e1e;border-radius:8px;background:#2a1111;color:#ffb4b4;font-size:12px;white-space:pre-wrap}
 .small{font-size:11px;color:var(--muted);margin-top:6px}
-/* Smooth needle movement */
+/* smooth needle */
 #needle{transition:transform .6s cubic-bezier(.2,.8,.2,1)}
 </style>
 </head>
@@ -181,7 +181,8 @@ async function getJSON(url, timeoutMs=10_000){
 }
 
 /*** STATE ***/
-let fxGBPperUSD = null;   // GBP from USD tick
+let fxGBPperUSD = null;      // GBP from USD tick
+let lastUSD = null;          // *** live USD cache (no DOM parsing) ***
 let ws = null, wsOpen = false, lastTickTs = 0;
 
 /*** LIVE PRICE VIA BINANCE WEBSOCKET (throttled) ***/
@@ -198,6 +199,7 @@ function openWS(){
     const data = JSON.parse(ev.data);
     const usd = Number(data.p);
     if(!Number.isFinite(usd)) return;
+    lastUSD = usd; // keep in state
     const gbp = fxGBPperUSD ? usd * fxGBPperUSD : NaN;
 
     const gbpText = Number.isFinite(gbp) ? nfGB.format(gbp) : "—";
@@ -213,7 +215,7 @@ document.addEventListener("visibilitychange", ()=>{
   else if(!wsOpen){ openWS(); }
 });
 
-/*** FAST LOOP: 24h change + FX ratio ***/
+/*** FAST LOOP: 24h change + FX ratio (also seeds lastUSD) ***/
 async function fastLoop(){
   try{
     hideError(); setNetNote("");
@@ -222,6 +224,7 @@ async function fastLoop(){
     const liveGBP = price?.bitcoin?.gbp;
     const chg24   = price?.bitcoin?.usd_24h_change;
 
+    if(Number.isFinite(liveUSD)) lastUSD = liveUSD;
     if(Number.isFinite(liveUSD) && Number.isFinite(liveGBP)){
       fxGBPperUSD = liveGBP / liveUSD;
     }
@@ -231,13 +234,6 @@ async function fastLoop(){
   }finally{
     setTimeout(fastLoop, FAST_MS);
   }
-}
-
-/*** helper: read USD from the price line (supports both with/without brackets) ***/
-function getUsdFromDom(){
-  const txt = $("price").textContent;
-  const m = txt.match(/\$\s*([\d,]*\.?\d*)/);
-  return m ? Number(m[1].replace(/,/g,'')) : NaN;
 }
 
 /*** SLOW LOOP: indicators + quick view ***/
@@ -261,20 +257,25 @@ async function slowLoop(){
     const ma200 = sma(closes,200);
     const ma350 = sma(closes,350);
 
-    const priceNowUSD = Number.isFinite(getUsdFromDom()) ? getUsdFromDom() : closes[i];
-    const dist200 = (ma200[i] ? (priceNowUSD/ma200[i]-1) : 0);
+    // use last valid MA values and lastUSD (no DOM scraping)
+    const lastNonNull = (arr)=>{ for(let j=arr.length-1;j>=0;j--){ if(Number.isFinite(arr[j])) return arr[j]; } return null; };
+    const ma200v = Number.isFinite(ma200[i]) ? ma200[i] : lastNonNull(ma200);
+    const ma111v = Number.isFinite(ma111[i]) ? ma111[i] : lastNonNull(ma111);
+    const ma350v = Number.isFinite(ma350[i]) ? ma350[i] : lastNonNull(ma350);
+
+    const priceNowUSD = Number.isFinite(lastUSD) ? lastUSD : closes[i];
+    const dist200 = (Number.isFinite(ma200v) && Number.isFinite(priceNowUSD))
+      ? (priceNowUSD/ma200v - 1)
+      : 0;
 
     // RSI weekly
     const rsiWSeries = rsi(weeklyFromDaily(closes),14);
     const rsiW = rsiWSeries[rsiWSeries.length-1] ?? 50;
 
-    // Pi-cycle spread (111 DMA vs 350 DMA * 2) with last-known fallback
-    const lastNonNull = (arr)=>{ for(let j=arr.length-1;j>=0;j--){ if(Number.isFinite(arr[j])) return arr[j]; } return null; };
-    const dma111 = Number.isFinite(ma111[i]) ? ma111[i] : lastNonNull(ma111);
-    const dma350 = Number.isFinite(ma350[i]) ? ma350[i] : lastNonNull(ma350);
+    // Pi-cycle spread (111 DMA vs 350 DMA * 2)
     let piText="—", piTone="amber";
-    if(dma111 && dma350){
-      const spread = (dma111/(dma350*2) - 1)*100;
+    if(Number.isFinite(ma111v) && Number.isFinite(ma350v)){
+      const spread = (ma111v/(ma350v*2) - 1)*100;
       piText = `${spread>=0?"+":""}${round(spread,1)}%`;
       piTone = spread>10 ? "red" : spread<-10 ? "green" : "amber";
     }
@@ -300,10 +301,10 @@ async function slowLoop(){
     // Heat score & verdict
     const sPi    = clamp((dist200*50),0,10);
     const sRsiW  = clamp(rsiW/10,0,10);
-    const sTrend = clamp(priceNowUSD>ma200[i]?6+Math.min(dist200*20,4):4+Math.max(dist200*20,-4),0,10);
+    const sTrend = clamp(priceNowUSD>ma200v?6+Math.min(dist200*20,4):4+Math.max(dist200*20,-4),0,10);
     const heat   = sPi*0.45 + sRsiW*0.35 + sTrend*0.20;
 
-    // Cycle bar
+    // Cycle bar (robust)
     const HALVING = Date.UTC(2024,3,20); // 20 Apr 2024
     const days = Math.floor((Date.now()-HALVING)/86400000);
     const cycleAge = clamp(days/1470,0,1);
