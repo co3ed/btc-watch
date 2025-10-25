@@ -23,7 +23,7 @@ h1{font-size:18px;margin:0}
 .bigline{display:flex;gap:10px;align-items:baseline;justify-content:center;margin-top:10px}
 .bigline .p{font-size:24px;font-weight:800}
 .bigline .d{font-size:13px;color:var(--muted)}
-.pill{padding:6px 10px;border-radius:999px;font-size:12px;font-weight:800;border:1px solid transparent}
+.pill{padding:6px 10px;border-radius:999px;font-size:12px;font-weight:800;border:1px solid transparent;min-width:84px;text-align:center}
 .green{background:rgba(31,191,117,.12);color:var(--green);border-color:rgba(31,191,117,.35)}
 .amber{background:rgba(245,165,36,.12);color:var(--amber);border-color:rgba(245,165,36,.35)}
 .red{background:rgba(234,57,67,.12);color:var(--red);border-color:rgba(234,57,67,.35)}
@@ -34,6 +34,8 @@ h1{font-size:18px;margin:0}
 footer{color:#9aa4b2;font-size:12px;margin-top:10px;text-align:center}
 #error{display:none;margin-top:10px;padding:10px;border:1px solid #8b1e1e;border-radius:8px;background:#2a1111;color:#ffb4b4;font-size:12px;white-space:pre-wrap}
 .small{font-size:11px;color:var(--muted);margin-top:6px}
+/* Smooth needle movement */
+#needle{transition:transform .6s cubic-bezier(.2,.8,.2,1)}
 </style>
 </head>
 <body>
@@ -62,7 +64,7 @@ footer{color:#9aa4b2;font-size:12px;margin-top:10px;text-align:center}
         </div>
 
         <div class="bigline">
-          <div class="p" id="price">£ —  $ — </div>
+          <div class="p" id="price">£ —  $ —</div>
           <div class="d" id="change">24h: —</div>
         </div>
 
@@ -116,11 +118,20 @@ const fundUrl  = (t=Date.now()) =>
 const fngUrl   = (t=Date.now()) =>
   `https://api.alternative.me/fng/?limit=1&date_format=us&_=${t}`;
 
-/*** DOM HELPERS ***/
+/*** DOM + FORMAT HELPERS ***/
 const $=(id)=>document.getElementById(id);
 const nowUTC = ()=>new Date().toISOString().replace('T',' ').slice(0,16);
 const round=(n,d=2)=>Number.isFinite(+n)?(+n).toFixed(d):"—";
 const clamp=(n,a,b)=>Math.max(a,Math.min(b,n));
+const nfGB = new Intl.NumberFormat('en-GB',{maximumFractionDigits:0});
+const nfUS2 = new Intl.NumberFormat('en-US',{maximumFractionDigits:2});
+const pct = (x,dp=2)=> Number.isFinite(+x) ? `${(+x).toFixed(dp)}%` : "—";
+const bps = x => { if(!Number.isFinite(+x)) return "—";
+  const v = +x;
+  if (Math.abs(v) >= 0.1) return v.toFixed(2)+"%";
+  if (Math.abs(v) >= 0.01) return v.toFixed(3)+"%";
+  return v.toFixed(4)+"%";
+};
 function setPill(el,tone,text){ if(!el)return; el.textContent=text; el.className=`pill ${tone}`; }
 function showError(m){const e=$("error");e.style.display="block";e.textContent=m;}
 function hideError(){const e=$("error");e.style.display="none";}
@@ -148,15 +159,13 @@ function setVerdict(s){
   setPill($("verdictPill"), cls==='buy'?'green':cls==='sell'?'red':'amber', v);
 }
 
-/*** HTTP: try direct → auto-proxy fallback if CORS blocks ***/
+/*** HTTP: direct → auto-proxy fallback if CORS blocks ***/
 async function getJSONAny(url, timeoutMs=10_000){
-  // try direct first
   try { return await getJSON(url, timeoutMs); }
   catch(e1){
-    // if aborted or other network errors, try proxies one by one
     for(const p of PROXIES){
       try { return await getJSON(p + encodeURIComponent(url), timeoutMs); }
-      catch(e2){ /* continue */ }
+      catch(e2){ /* next */ }
     }
     throw e1;
   }
@@ -172,22 +181,28 @@ async function getJSON(url, timeoutMs=10_000){
 }
 
 /*** STATE ***/
-let fxGBPperUSD = null;   // live GBP from USD tick
-let ws = null, wsOpen = false;
+let fxGBPperUSD = null;   // GBP from USD tick
+let ws = null, wsOpen = false, lastTickTs = 0;
 
-/*** LIVE PRICE VIA BINANCE WEBSOCKET ***/
+/*** LIVE PRICE VIA BINANCE WEBSOCKET (throttled) ***/
 function openWS(){
   try{ if(ws) ws.close(); }catch{}
   ws = new WebSocket("wss://stream.binance.com:9443/ws/btcusdt@trade");
   wsOpen = false;
   ws.onopen = ()=>{ wsOpen = true; };
   ws.onmessage = (ev)=>{
+    const t = performance.now();
+    if (t - lastTickTs < 250) return; // max 4 updates/sec
+    lastTickTs = t;
+
     const data = JSON.parse(ev.data);
-    const usd = Number(data.p); // trade price
+    const usd = Number(data.p);
     if(!Number.isFinite(usd)) return;
-    const gbp = fxGBPperUSD ? usd * fxGBPperUSD : null;
-    const gbpText = gbp ? Number(gbp).toLocaleString() : "—";
-    $("price").textContent = `£ ${gbpText}  ( $ ${Number(usd).toLocaleString()} )`;
+    const gbp = fxGBPperUSD ? usd * fxGBPperUSD : NaN;
+
+    const gbpText = Number.isFinite(gbp) ? nfGB.format(gbp) : "—";
+    const usdText = nfUS2.format(usd);
+    $("price").textContent = `£ ${gbpText}  $ ${usdText}`;
     $("ts").textContent = nowUTC();
   };
   ws.onclose = ()=>{ wsOpen = false; setTimeout(openWS, BACKOFF); };
@@ -198,7 +213,7 @@ document.addEventListener("visibilitychange", ()=>{
   else if(!wsOpen){ openWS(); }
 });
 
-/*** FAST LOOP: price snapshot (24h change + FX ratio) ***/
+/*** FAST LOOP: 24h change + FX ratio ***/
 async function fastLoop(){
   try{
     hideError(); setNetNote("");
@@ -210,12 +225,19 @@ async function fastLoop(){
     if(Number.isFinite(liveUSD) && Number.isFinite(liveGBP)){
       fxGBPperUSD = liveGBP / liveUSD;
     }
-    $("change").textContent = `24h: ${(chg24>=0?"+":"")+round(chg24,2)}%`;
+    $("change").textContent = `24h: ${(chg24>=0?"+":"")}${pct(chg24,2)}`;
   }catch(e){
     showError(e.message || String(e));
   }finally{
     setTimeout(fastLoop, FAST_MS);
   }
+}
+
+/*** helper: read USD from the price line (supports both with/without brackets) ***/
+function getUsdFromDom(){
+  const txt = $("price").textContent;
+  const m = txt.match(/\$\s*([\d,]*\.?\d*)/);
+  return m ? Number(m[1].replace(/,/g,'')) : NaN;
 }
 
 /*** SLOW LOOP: indicators + quick view ***/
@@ -225,13 +247,10 @@ async function slowLoop(){
     hideError(); setNetNote("");
     const [chart, fund, fng] = await Promise.all([
       getJSONAny(chartUrl()),
-      getJSONAny(fundUrl()).catch(()=>null),  // will be proxied if needed
+      getJSONAny(fundUrl()).catch(()=>null),
       getJSONAny(fngUrl()).catch(()=>null),
     ]);
 
-    // If either came via proxy, mention it once (nice for debugging)
-    // crude check: response URL can't be seen; instead infer from pills later
-    // We’ll just leave a generic note when either is null (blocked even after fallback)
     if(fund===null || fng===null){ setNetNote("Note: some metrics blocked by your network — using best available."); }
 
     const closes = (chart?.prices || []).map(p=>p[1]).filter(Number.isFinite);
@@ -242,10 +261,7 @@ async function slowLoop(){
     const ma200 = sma(closes,200);
     const ma350 = sma(closes,350);
 
-    // Use USD from DOM if present (WS), else last close
-    const domUSDMatch = $("price").textContent.match(/\$ ([\d,\.]+)/);
-    const domUSD = domUSDMatch ? Number(domUSDMatch[1].replace(/,/g,'')) : NaN;
-    const priceNowUSD = Number.isFinite(domUSD) ? domUSD : closes[i];
+    const priceNowUSD = Number.isFinite(getUsdFromDom()) ? getUsdFromDom() : closes[i];
     const dist200 = (ma200[i] ? (priceNowUSD/ma200[i]-1) : 0);
 
     // RSI weekly
@@ -266,10 +282,10 @@ async function slowLoop(){
     // Funding (Binance)
     let fundText="—", fundTone="amber";
     if(Array.isArray(fund) && fund.length){
-      const pct = Number(fund[0].fundingRate)*100;
-      if(Number.isFinite(pct)){
-        fundText = `${round(pct,4)}%`;
-        fundTone = pct>0.05?"red":pct<-0.05?"green":"amber";
+      const pctVal = Number(fund[0].fundingRate)*100;
+      if(Number.isFinite(pctVal)){
+        fundText = bps(pctVal);
+        fundTone = pctVal>0.05?"red":pctVal<-0.05?"green":"amber";
       }
     } else if(fund===null){ fundText="— (blocked)"; fundTone="amber"; }
 
@@ -299,7 +315,9 @@ async function slowLoop(){
     setVerdict(heat);
 
     const trendTone = dist200>0?"green":dist200<0?"red":"amber";
-    const trendText = Number.isFinite(dist200)?(dist200>0?`Up (${round(dist200*100,1)}%)`:`Down (${round(dist200*100,1)}%)`):"—";
+    const trendText = Number.isFinite(dist200)
+      ? (dist200>0?`Up (${pct(dist200*100,1)})`:`Down (${pct(dist200*100,1)})`)
+      : "—";
     setPill($("trend"), trendTone, trendText);
     setPill($("rsiw"), rsiW>70?"red":rsiW<30?"green":"amber", round(rsiW,1));
     setPill($("fund"), fundTone, fundText);
