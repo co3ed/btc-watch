@@ -91,65 +91,105 @@ footer{color:#9aa4b2;font-size:12px;margin-top:10px;text-align:center}
       </aside>
     </main>
 
-    <footer>0–3 = BUY · 4–6 = HOLD · 7–10 = SELL · (Data via CoinGecko + CORS.sh)</footer>
+    <footer>0–3 = BUY · 4–6 = HOLD · 7–10 = SELL · (Data via CoinGecko)</footer>
   </div>
 
 <script>
 const REFRESH_MS = 30*60*1000;
 
-// Use CORS.sh instead of AllOrigins
-p
-
 const P_PRICE = "https://api.coingecko.com/api/v3/simple/price?ids=bitcoin&vs_currencies=usd,gbp&include_24hr_change=true";
 const P_CHART = "https://api.coingecko.com/api/v3/coins/bitcoin/market_chart?vs_currency=usd&days=365&interval=daily";
 
-const $=(id)=>document.getElementById(id);
+const $ = (id) => document.getElementById(id);
 function nowUTC(){return new Date().toISOString().replace('T',' ').slice(0,16);}
 function round(n,d=2){return Number.parseFloat(n).toFixed(d);}
 function clamp(n,a,b){return Math.max(a,Math.min(b,n));}
 function scoreToAngle(s){return -90+(clamp(s,0,10)/10)*180;}
-function setVerdict(s){let v="HOLD",cls="hold";if(s<=3.3){v="BUY";cls="buy"}else if(s>=6.7){v="SELL";cls="sell"}$("verdict").textContent=v;$("verdict").className=`verdict ${cls}`;const vp=$("verdictPill");if(vp){vp.textContent=v;vp.className=`pill ${cls==='buy'?'green':cls==='sell'?'red':'amber'}`;}}
+function setVerdict(s){
+  let v="HOLD",cls="hold";
+  if(s<=3.3){v="BUY";cls="buy"}
+  else if(s>=6.7){v="SELL";cls="sell"}
+  $("verdict").textContent=v;
+  $("verdict").className=`verdict ${cls}`;
+  const vp=$("verdictPill");
+  if(vp){vp.textContent=v;vp.className=`pill ${cls==='buy'?'green':cls==='sell'?'red':'amber'}`;}
+}
 function showError(m){const e=$("error");e.style.display="block";e.textContent=m;}
-function sma(v,w){const o=Array(v.length).fill(null);let s=0;for(let i=0;i<v.length;i++){s+=v[i];if(i>=w)s-=v[i-w];if(i>=w-1)o[i]=s/w;}return o;}
-function rsi(vals,len=14){const out=Array(vals.length).fill(null);let g=0,l=0;for(let i=1;i<=len;i++){const d=vals[i]-vals[i-1];if(d>0)g+=d;else l-=d;}out[len]=100-(100/(1+(g/len)/((l/len)||1e-9)));for(let i=len+1;i<vals.length;i++){const d=vals[i]-vals[i-1],G=d>0?d:0,L=d<0?-d:0;g=(g*(len-1)+G)/len;l=(l*(len-1)+L)/len;out[i]=100-(100/(1+(g/(l||1e-9))));}return out;}
+function sma(v,w){
+  const o=Array(v.length).fill(null);let s=0;
+  for(let i=0;i<v.length;i++){s+=v[i];if(i>=w)s-=v[i-w];if(i>=w-1)o[i]=s/w;}
+  return o;
+}
+function rsi(vals,len=14){
+  if(vals.length<=len) return Array(vals.length).fill(null);
+  const out=Array(vals.length).fill(null);let g=0,l=0;
+  for(let i=1;i<=len;i++){const d=vals[i]-vals[i-1];if(d>0)g+=d;else l-=d;}
+  out[len]=100-(100/(1+(g/len)/((l/len)||1e-9)));
+  for(let i=len+1;i<vals.length;i++){
+    const d=vals[i]-vals[i-1],G=d>0?d:0,L=d<0?-d:0;
+    g=(g*(len-1)+G)/len;l=(l*(len-1)+L)/len;
+    out[i]=100-(100/(1+(g/(l||1e-9))));
+  }
+  return out;
+}
 function weeklyFromDaily(c){const w=[];for(let i=0;i<c.length;i+=7)w.push(c[i]);return w;}
 
 async function getJSON(url){
-  const r=await fetch(proxy+url,{headers:HEADERS});
-  if(!r.ok) throw new Error("HTTP "+r.status);
+  const r = await fetch(url);
+  if(!r.ok) throw new Error("HTTP " + r.status);
   return r.json();
 }
 
 async function fetchAll(){
   try{
     $("error").style.display="none";
-    const [price,chart]=await Promise.all([
-      getJSON(P_PRICE),
-      getJSON(P_CHART)
-    ]);
+    const [price,chart] = await Promise.all([ getJSON(P_PRICE), getJSON(P_CHART) ]);
 
-    const liveUSD=price.bitcoin.usd, liveGBP=price.bitcoin.gbp, chg24=price.bitcoin.usd_24h_change;
-    const closes=chart.prices.map(p=>p[1]);
+    const liveUSD = price?.bitcoin?.usd;
+    const liveGBP = price?.bitcoin?.gbp;
+    const chg24   = price?.bitcoin?.usd_24h_change;
+    const closes  = chart?.prices?.map(p=>p[1]) || [];
     if(!closes.length) throw new Error("No chart data");
 
-    const i=closes.length-1, ma111=sma(closes,111), ma200=sma(closes,200), ma350=sma(closes,350);
-    const priceNow=liveUSD, dist200=priceNow/ma200[i]-1, rsiW=rsi(weeklyFromDaily(closes),14).at(-1);
-    const sPi=clamp(dist200*50,0,10), sRsiW=clamp((rsiW||50)/10,0,10), sTrend=clamp(priceNow>ma200[i]?6+Math.min(dist200*20,4):4+Math.max(dist200*20,-4),0,10);
-    const heat=sPi*0.45+sRsiW*0.35+sTrend*0.2;
+    const i = closes.length - 1;
+    const ma200 = sma(closes,200);
+    if(ma200[i] == null) throw new Error("Not enough data for 200-day MA yet");
 
-    const HALVING=Date.UTC(2024,3,20), days=Math.floor((Date.now()-HALVING)/86400000);
-    const cycleAge=clamp(days/1470,0,1), macro=clamp((dist200*200+(rsiW||50))/2,0,100), cycleScore=clamp((cycleAge*50)+(macro/2),0,100);
+    const priceNow = liveUSD;
+    const dist200  = priceNow/ma200[i]-1;
 
-    $("ts").textContent=nowUTC();
-    $("price").textContent=`£ ${Number(liveGBP).toLocaleString()}  ( $ ${Number(liveUSD).toLocaleString()} )`;
-    $("change").textContent=`24h: ${(chg24>=0?"+":"")+round(chg24,2)}%`;
-    $("needle").setAttribute("transform",`rotate(${scoreToAngle(heat)},120,130)`);setVerdict(heat);
-    $("trend").textContent=dist200>0?`Up (${round(dist200*100,1)}%)`:`Down (${round(dist200*100,1)}%)`;
-    $("rsiw").textContent=round(rsiW,1);
-    $("fund").textContent="—";$("fg").textContent="—";$("pi").textContent="—";
-    $("cycleFill").style.width=`${Math.round(cycleScore)}%`;
-  }catch(e){showError(e.message||e);}
-  finally{setTimeout(fetchAll,REFRESH_MS);}
+    const rsiWSeries = rsi(weeklyFromDaily(closes),14);
+    const rsiW = rsiWSeries[rsiWSeries.length-1] ?? 50;
+
+    const sPi    = clamp(dist200*50,0,10);
+    const sRsiW  = clamp(rsiW/10,0,10);
+    const sTrend = clamp(priceNow>ma200[i]?6+Math.min(dist200*20,4):4+Math.max(dist200*20,-4),0,10);
+    const heat   = sPi*0.45 + sRsiW*0.35 + sTrend*0.20;
+
+    const HALVING = Date.UTC(2024,3,20); // 20 Apr 2024
+    const days = Math.floor((Date.now()-HALVING)/86400000);
+    const cycleAge = clamp(days/1470,0,1);
+    const macro = clamp((dist200*200 + rsiW)/2,0,100);
+    const cycleScore = clamp((cycleAge*50) + (macro/2),0,100);
+
+    $("ts").textContent = nowUTC();
+    $("price").textContent = `£ ${Number(liveGBP).toLocaleString()}  ( $ ${Number(liveUSD).toLocaleString()} )`;
+    $("change").textContent = `24h: ${(chg24>=0?"+":"")+round(chg24,2)}%`;
+    $("needle").setAttribute("transform", `rotate(${scoreToAngle(heat)},120,130)`);
+    setVerdict(heat);
+
+    $("trend").textContent = dist200>0 ? `Up (${round(dist200*100,1)}%)` : `Down (${round(dist200*100,1)}%)`;
+    $("rsiw").textContent = round(rsiW,1);
+    $("fund").textContent = "—";
+    $("fg").textContent   = "—";
+    $("pi").textContent   = "—";
+
+    $("cycleFill").style.width = `${Math.round(cycleScore)}%`;
+  }catch(e){
+    showError(e.message || String(e));
+  }finally{
+    setTimeout(fetchAll, REFRESH_MS);
+  }
 }
 fetchAll();
 </script>
