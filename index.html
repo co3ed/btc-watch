@@ -36,8 +36,6 @@ footer{color:#9aa4b2;font-size:12px;margin-top:10px;text-align:center}
 .small{font-size:11px;color:var(--muted);margin-top:6px}
 /* smooth needle */
 #needle{transition:transform .6s cubic-bezier(.2,.8,.2,1)}
-/* keep $112,429 on one line */
-.nowrap{white-space:nowrap}
 </style>
 </head>
 <body>
@@ -126,7 +124,7 @@ const nowUTC = ()=>new Date().toISOString().replace('T',' ').slice(0,16);
 const round=(n,d=2)=>Number.isFinite(+n)?(+n).toFixed(d):"—";
 const clamp=(n,a,b)=>Math.max(a,Math.min(b,n));
 const nfGB = new Intl.NumberFormat('en-GB',{maximumFractionDigits:0});
-const nfUS0 = new Intl.NumberFormat('en-US',{maximumFractionDigits:0}); // USD: no decimals
+const nfUS2 = new Intl.NumberFormat('en-US',{maximumFractionDigits:2});
 const pct = (x,dp=2)=> Number.isFinite(+x) ? `${(+x).toFixed(dp)}%` : "—";
 const bps = x => { if(!Number.isFinite(+x)) return "—";
   const v = +x;
@@ -184,7 +182,7 @@ async function getJSON(url, timeoutMs=10_000){
 
 /*** STATE ***/
 let fxGBPperUSD = null;      // GBP from USD tick
-let lastUSD = null;          // live USD cache (no DOM parsing)
+let lastUSD = null;          // *** live USD cache (no DOM parsing) ***
 let ws = null, wsOpen = false, lastTickTs = 0;
 
 /*** LIVE PRICE VIA BINANCE WEBSOCKET (throttled) ***/
@@ -192,9 +190,7 @@ function openWS(){
   try{ if(ws) ws.close(); }catch{}
   ws = new WebSocket("wss://stream.binance.com:9443/ws/btcusdt@trade");
   wsOpen = false;
-
   ws.onopen = ()=>{ wsOpen = true; };
-
   ws.onmessage = (ev)=>{
     const t = performance.now();
     if (t - lastTickTs < 250) return; // max 4 updates/sec
@@ -203,22 +199,17 @@ function openWS(){
     const data = JSON.parse(ev.data);
     const usd = Number(data.p);
     if(!Number.isFinite(usd)) return;
-
     lastUSD = usd; // keep in state
     const gbp = fxGBPperUSD ? usd * fxGBPperUSD : NaN;
 
     const gbpText = Number.isFinite(gbp) ? nfGB.format(gbp) : "—";
-    const usdText = nfUS0.format(usd);
-
-    // keep $ glued to the number, prevent wrapping on mobile
-    $("price").innerHTML = `£ ${gbpText}  <span class="nowrap">$${usdText}</span>`;
+    const usdText = nfUS2.format(usd);
+    $("price").textContent = `£ ${gbpText}  $ ${usdText}`;
     $("ts").textContent = nowUTC();
   };
-
   ws.onclose = ()=>{ wsOpen = false; setTimeout(openWS, BACKOFF); };
   ws.onerror = ()=>{ try{ws.close();}catch{} };
 }
-
 document.addEventListener("visibilitychange", ()=>{
   if(document.hidden){ try{ ws && ws.close(); }catch{} }
   else if(!wsOpen){ openWS(); }
@@ -266,7 +257,7 @@ async function slowLoop(){
     const ma200 = sma(closes,200);
     const ma350 = sma(closes,350);
 
-    // use last valid MA values and lastUSD
+    // use last valid MA values and lastUSD (no DOM scraping)
     const lastNonNull = (arr)=>{ for(let j=arr.length-1;j>=0;j--){ if(Number.isFinite(arr[j])) return arr[j]; } return null; };
     const ma200v = Number.isFinite(ma200[i]) ? ma200[i] : lastNonNull(ma200);
     const ma111v = Number.isFinite(ma111[i]) ? ma111[i] : lastNonNull(ma111);
