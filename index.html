@@ -203,10 +203,8 @@ function openWS(){
     const gbp = fxGBPperUSD ? usd * fxGBPperUSD : NaN;
 
     const gbpText = Number.isFinite(gbp) ? nfGB.format(gbp) : "—";
-    const usdText = nfUS2.format(usd);
-    $("price").textContent = `£ ${gbpText}  $ ${usdText}`;
-    $("ts").textContent = nowUTC();
-  };
+const usdText = new Intl.NumberFormat('en-US',{maximumFractionDigits:0}).format(usd);
+$("price").innerHTML = `£ ${gbpText}  <span class="nowrap">$${usdText}</span>`;
   ws.onclose = ()=>{ wsOpen = false; setTimeout(openWS, BACKOFF); };
   ws.onerror = ()=>{ try{ws.close();}catch{} };
 }
